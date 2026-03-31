@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"from pyannote.audio.pipelines import SpeakerDiarization; from pyannote.core import Annotation; help\\(Annotation.itertracks\\)\")",
+      "Bash(python3 -c \"from pyannote.audio import Pipeline; import inspect; print\\([m for m in dir\\(Pipeline\\) if not m.startswith\\(''''_''''\\)]\\)\")"
+    ]
+  }
+}
