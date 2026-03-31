@@ -6,19 +6,34 @@ Optionally adds speaker diarization via pyannote-audio.
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
+import torch
 import whisper
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def format_duration(seconds: float) -> str:
+    """Format seconds into a human-readable duration string."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(seconds, 60)
+    return f"{int(m)}m {s:.1f}s"
 
 
 def load_audio_for_diarization(file_path: str):
     """Convert video/audio to a format pyannote can process."""
-    import torch
-    import torchaudio
+    import soundfile as sf
 
-    waveform, sample_rate = torchaudio.load(file_path)
-    # pyannote expects mono audio
-    if waveform.shape[0] > 1:
+    data, sample_rate = sf.read(file_path, dtype="float32")
+    waveform = torch.from_numpy(data)
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    else:
+        # soundfile returns (samples, channels) — transpose and mix to mono
+        waveform = waveform.T
         waveform = torch.mean(waveform, dim=0, keepdim=True)
     return {"waveform": waveform, "sample_rate": sample_rate}
 
@@ -27,12 +42,15 @@ def diarize(file_path: str, hf_token: str, num_speakers: int = None):
     """Run speaker diarization and return list of (start, end, speaker) turns."""
     from pyannote.audio import Pipeline
 
+    t0 = time.monotonic()
     print("Loading diarization model...")
     pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
         token=hf_token,
-    )
+    ).to(torch.device(DEVICE))
+    print(f"  Model loaded in {format_duration(time.monotonic() - t0)}")
 
+    t1 = time.monotonic()
     print("Running speaker diarization...")
     audio = load_audio_for_diarization(file_path)
     params = {}
@@ -43,6 +61,7 @@ def diarize(file_path: str, hf_token: str, num_speakers: int = None):
     from pyannote.audio.pipelines.utils.hook import ProgressHook
     with ProgressHook() as hook:
         result = pipeline(audio, hook=hook, **params)
+    print(f"  Diarization completed in {format_duration(time.monotonic() - t1)}")
 
     # Newer pyannote returns a DiarizeOutput dataclass; older versions return Annotation directly
     diarization = getattr(result, "speaker_diarization", result)
@@ -89,6 +108,9 @@ def transcribe(
     out_dir = Path(output_dir) if output_dir else path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    total_start = time.monotonic()
+    timings = {}
+
     # Speaker diarization (run first so it overlaps mentally with transcription wait)
     speaker_turns = None
     if speakers:
@@ -100,18 +122,26 @@ def transcribe(
                 file=sys.stderr,
             )
             sys.exit(1)
+        t = time.monotonic()
         speaker_turns = diarize(str(path), hf_token, num_speakers)
+        timings["Diarization (total)"] = time.monotonic() - t
 
     # Transcription
-    print(f"Loading Whisper model '{model_size}'... (first run downloads ~3GB)")
-    model = whisper.load_model(model_size)
+    t = time.monotonic()
+    print(f"Loading Whisper model '{model_size}' on {DEVICE}... (first run downloads ~3GB)")
+    model = whisper.load_model(model_size, device=DEVICE)
+    timings["Model loading"] = time.monotonic() - t
+    print(f"  Model loaded in {format_duration(timings['Model loading'])}")
 
+    t = time.monotonic()
     print(f"Transcribing: {path.name}")
     result = model.transcribe(
         str(path),
         language=None,  # auto-detect — lets Whisper handle code-switching
         verbose=True,
     )
+    timings["Transcription"] = time.monotonic() - t
+    print(f"  Transcription completed in {format_duration(timings['Transcription'])}")
 
     segments = result["segments"]
 
@@ -148,6 +178,13 @@ def transcribe(
                 text = f"[{seg['speaker']}] {text}"
             f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
     print(f"SRT subtitles saved to: {srt_path}")
+
+    # Print timing summary
+    timings["Total"] = time.monotonic() - total_start
+    print(f"\n{'— Timing Summary ':—<40}")
+    print(f"  Device: {DEVICE}" + (f" ({torch.cuda.get_device_name(0)})" if DEVICE == "cuda" else ""))
+    for label, elapsed in timings.items():
+        print(f"  {label:.<30} {format_duration(elapsed)}")
 
     return result
 
