@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "Usage: $(basename "$0") <video-file>" >&2
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "Usage: $(basename "$0") <video-file> [output-dir]" >&2
   exit 1
 fi
 
@@ -13,10 +13,10 @@ if [[ ! -f "$VIDEO" ]]; then
   exit 1
 fi
 
-DIR="$(dirname "$VIDEO")"
 BASENAME="$(basename "$VIDEO")"
 NAME="${BASENAME%.*}"
-BASE="$DIR/${NAME}_audio"
+OUT_DIR="${2:-$(dirname "$VIDEO")}"
+BASE="${OUT_DIR}/${NAME}_audio"
 
 echo "Extracting MP3..."
 ffmpeg -y -i "$VIDEO" -vn -ar 16000 -ac 1 -acodec libmp3lame -b:a 32k "${BASE}.mp3"
