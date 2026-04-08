@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $(basename "$0") <video-file>" >&2
+  exit 1
+fi
+
+VIDEO="$1"
+
+if [[ ! -f "$VIDEO" ]]; then
+  echo "Error: file not found: $VIDEO" >&2
+  exit 1
+fi
+
+DIR="$(dirname "$VIDEO")"
+BASENAME="$(basename "$VIDEO")"
+NAME="${BASENAME%.*}"
+BASE="$DIR/${NAME}_audio"
+
+echo "Extracting MP3..."
+ffmpeg -y -i "$VIDEO" -vn -ar 16000 -ac 1 -acodec libmp3lame -b:a 32k "${BASE}.mp3"
+
+echo "Done: ${BASE}.mp3"
